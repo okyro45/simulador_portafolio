@@ -13,35 +13,71 @@ import statsmodels.api as sm
 # ----------------------- Utilidades Generales ----------------------- #
 PERIODS_PER_YEAR = 12  # se asume periodicidad mensual
 
+
 def annual_to_period_rate(r_annual: float, m: int = PERIODS_PER_YEAR) -> float:
     return (1 + r_annual) ** (1 / m) - 1
+
 
 def annual_to_period_vol(vol_annual: float, m: int = PERIODS_PER_YEAR) -> float:
     return vol_annual / np.sqrt(m)
 
+
 def to_annual_return(r_period: float, m: int = PERIODS_PER_YEAR) -> float:
     return (1 + r_period) ** m - 1
+
 
 def to_annual_vol(vol_period: float, m: int = PERIODS_PER_YEAR) -> float:
     return vol_period * np.sqrt(m)
 
+
+# Helpers robustos para convertir números que pueden venir como NaN/strings
+
+def get_float(row_or_val, key: Optional[str] = None, default: float = 0.0) -> float:
+    """Devuelve float seguro desde un DataFrame row (usando 'key') o desde un valor directo."""
+    if key is not None:
+        val = row_or_val.get(key, default)
+    else:
+        val = row_or_val
+    val = pd.to_numeric(val, errors="coerce")
+    return float(val) if pd.notna(val) else float(default)
+
+
+def get_int(row_or_val, key: Optional[str] = None, default: int = 0) -> int:
+    """Devuelve int seguro (evita ValueError: cannot convert float NaN to integer)."""
+    if key is not None:
+        val = row_or_val.get(key, default)
+    else:
+        val = row_or_val
+    val = pd.to_numeric(val, errors="coerce")
+    return int(val) if pd.notna(val) else int(default)
+
+
 # Conversión de retornos a moneda base
 # r_fx es el retorno del USD vs PEN (si r_fx > 0, el USD se apreció vs PEN)
 
-def convert_return_to_base(r_local: pd.Series, asset_ccy: str, base_ccy: str, r_fx_usd_pen: Optional[pd.Series]) -> pd.Series:
+def convert_return_to_base(
+    r_local: pd.Series,
+    asset_ccy: str,
+    base_ccy: str,
+    r_fx_usd_pen: Optional[pd.Series],
+) -> pd.Series:
     r_local = r_local.astype(float)
     if asset_ccy == base_ccy:
         return r_local
     if r_fx_usd_pen is None:
         # Sin serie FX: aproximación sin convertir (advertiremos en UI)
         return r_local
-    r_fx_usd_pen = r_fx_usd_pen.reindex_like(r_local)
+    # Alinea FX al índice de r_local
+    r_fx_usd_pen = pd.Series(r_fx_usd_pen).reindex(r_local.index)
+    # Rellena faltantes de FX con 0 (sin movimiento) para no propagar NaN
+    r_fx_usd_pen = r_fx_usd_pen.fillna(0.0)
     if asset_ccy == 'USD' and base_ccy == 'PEN':
         return (1 + r_local) * (1 + r_fx_usd_pen) - 1
     if asset_ccy == 'PEN' and base_ccy == 'USD':
         return (1 + r_local) / (1 + r_fx_usd_pen) - 1
     # Si se agregan otras monedas en el futuro
     return r_local
+
 
 # VaR y CVaR (histórico y paramétrico normal)
 
@@ -70,6 +106,7 @@ def parametric_cvar(mean: float, vol: float, alpha: float = 0.95) -> float:
     cvar = -(mean - vol * pdf / (1 - alpha))
     return cvar
 
+
 # Beta, Alfa y R^2 por regresión lineal
 
 def regression_metrics(port_ret: pd.Series, bench_ret: pd.Series):
@@ -84,6 +121,7 @@ def regression_metrics(port_ret: pd.Series, bench_ret: pd.Series):
     r2 = model.rsquared
     return alpha, beta, r2
 
+
 # ----------------------- Datos & Estructuras ----------------------- #
 ASSET_CLASSES = [
     'Acciones',
@@ -93,6 +131,7 @@ ASSET_CLASSES = [
 ]
 
 CURRENCIES = ['PEN', 'USD']
+
 
 @dataclass
 class Position:
@@ -108,6 +147,7 @@ class Position:
     maturity_date: str = ''
     issuer: str = ''
     vol_annual: float = 0.15  # volatilidad anual estimada (para simulación si no hay series)
+
 
 # ----------------------- UI ----------------------- #
 st.set_page_config(page_title='Simulador de Portafolio PEN-USD', layout='wide')
@@ -127,8 +167,16 @@ with st.sidebar:
     r_fx_series = None
     if fx_returns_file is not None:
         fx_df = pd.read_csv(fx_returns_file)
+        # Si existe una columna fecha, úsala como índice de la serie FX
+        date_cols = [c for c in fx_df.columns if c.lower() in ('date', 'fecha')]
         if 'usd_pen' in fx_df.columns:
             r_fx_series = fx_df['usd_pen']
+            if date_cols:
+                try:
+                    idx = pd.to_datetime(fx_df[date_cols[0]])
+                    r_fx_series.index = idx
+                except Exception:
+                    pass
         else:
             st.warning("El CSV de FX debe tener una columna llamada 'usd_pen'. Se ignorará la serie.")
 
@@ -232,6 +280,7 @@ with st.expander('⚗️ Si no hay series: parámetros para series sintéticas')
     bench_mu_ann = st.number_input('Benchmark: rendimiento anual esperado', value=0.08, step=0.01, format='%.4f')
     bench_vol_ann = st.number_input('Benchmark: volatilidad anual', value=0.18, step=0.01, format='%.4f')
 
+
 # ----------------------- Construcción del Portafolio ----------------------- #
 
 def build_positions() -> pd.DataFrame:
@@ -239,69 +288,72 @@ def build_positions() -> pd.DataFrame:
     # Acciones
     if len(stocks_df) > 0:
         for _, r in stocks_df.iterrows():
-            value = float(r.get('price', 0) * r.get('quantity', 0))
-            mu_ann = np.nan  # se puede inferir por dividendo + crecimiento (omitir para simplicidad)
+            price = get_float(r, 'price', 0)
+            qty = get_float(r, 'quantity', 0)
+            value = float(price * qty)
             rows.append({
-                'symbol': str(r['symbol']),
+                'symbol': str(r.get('symbol', '')),
                 'class': 'Acciones',
-                'currency': str(r['currency']),
+                'currency': str(r.get('currency', 'USD')),
                 'value_nominal': value,
-                'price': float(r.get('price', 0)),
-                'quantity': float(r.get('quantity', 0)),
-                'div_ps_ann': float(r.get('dividend_per_share_annual', 0)),
+                'price': price,
+                'quantity': qty,
+                'div_ps_ann': get_float(r, 'dividend_per_share_annual', 0),
                 'rate_annual': np.nan,
-                'vol_annual': float(r.get('vol_annual', 0.20)),
+                'vol_annual': get_float(r, 'vol_annual', 0.20),
             })
     # Bonos
     if len(bonds_df) > 0:
         for _, r in bonds_df.iterrows():
             rows.append({
-                'symbol': str(r['symbol']),
+                'symbol': str(r.get('symbol', '')),
                 'class': 'Bonos',
-                'currency': str(r['currency']),
-                'value_nominal': float(r.get('amount', 0)),
-                'rate_annual': float(r.get('rate_annual', 0.0)),
-                'term_months': int(r.get('term_months', 12)),
+                'currency': str(r.get('currency', 'PEN')),
+                'value_nominal': get_float(r, 'amount', 0),
+                'rate_annual': get_float(r, 'rate_annual', 0.0),
+                'term_months': get_int(r, 'term_months', 12),  # ✅ evita ValueError por NaN
                 'maturity_date': str(r.get('maturity_date', '')),
                 'issuer': str(r.get('issuer', '')),
-                'vol_annual': float(r.get('vol_annual', 0.05)),
+                'vol_annual': get_float(r, 'vol_annual', 0.05),
             })
     # Depósitos a plazo
     if len(td_df) > 0:
         for _, r in td_df.iterrows():
             rows.append({
-                'symbol': str(r['symbol']),
+                'symbol': str(r.get('symbol', '')),
                 'class': 'Depósitos a Plazo',
-                'currency': str(r['currency']),
-                'value_nominal': float(r.get('amount', 0)),
-                'rate_annual': float(r.get('rate_annual', 0.0)),
-                'term_months': int(r.get('term_months', 12)),
+                'currency': str(r.get('currency', 'PEN')),
+                'value_nominal': get_float(r, 'amount', 0),
+                'rate_annual': get_float(r, 'rate_annual', 0.0),
+                'term_months': get_int(r, 'term_months', 12),  # ✅ evita ValueError por NaN
                 'maturity_date': str(r.get('maturity_date', '')),
                 'issuer': str(r.get('issuer', '')),
-                'vol_annual': float(r.get('vol_annual', 0.01)),
+                'vol_annual': get_float(r, 'vol_annual', 0.01),
             })
     # FII
     if len(fii_df) > 0:
         for _, r in fii_df.iterrows():
             rows.append({
-                'symbol': str(r['symbol']),
+                'symbol': str(r.get('symbol', '')),
                 'class': 'Fondos Inmobiliarios',
-                'currency': str(r['currency']),
-                'value_nominal': float(r.get('amount', 0)),
-                'rate_annual': float(r.get('rate_annual', 0.0)),
-                'term_months': int(r.get('term_months', 12)),
+                'currency': str(r.get('currency', 'USD')),
+                'value_nominal': get_float(r, 'amount', 0),
+                'rate_annual': get_float(r, 'rate_annual', 0.0),
+                'term_months': get_int(r, 'term_months', 12),  # ✅ evita ValueError por NaN
                 'maturity_date': str(r.get('maturity_date', '')),
                 'issuer': str(r.get('issuer', '')),
-                'vol_annual': float(r.get('vol_annual', 0.12)),
+                'vol_annual': get_float(r, 'vol_annual', 0.12),
             })
     df = pd.DataFrame(rows)
     return df
+
 
 positions_df = build_positions()
 
 if positions_df.empty:
     st.warning('Agrega al menos una posición.')
     st.stop()
+
 
 # Valor de mercado por posición (en moneda base)
 # Para acciones, usamos price*quantity convertido al spot si hay distinta moneda
@@ -310,20 +362,27 @@ if positions_df.empty:
 def position_value_base(row) -> float:
     val_local = row.get('value_nominal', 0.0)
     if row['class'] == 'Acciones':
-        val_local = float(row.get('price', 0.0)) * float(row.get('quantity', 0.0))
+        val_local = float(get_float(row, 'price', 0.0) * get_float(row, 'quantity', 0.0))
     if row['currency'] == base_ccy:
-        return val_local
+        return float(val_local) if pd.notna(val_local) else 0.0
     # convertir al spot
     if row['currency'] == 'USD' and base_ccy == 'PEN':
-        return val_local * spot_fx
+        return float(val_local) * spot_fx if pd.notna(val_local) else 0.0
     if row['currency'] == 'PEN' and base_ccy == 'USD':
-        return val_local / spot_fx
-    return val_local
+        return float(val_local) / spot_fx if pd.notna(val_local) and spot_fx != 0 else 0.0
+    return float(val_local) if pd.notna(val_local) else 0.0
+
 
 positions_df['value_base'] = positions_df.apply(position_value_base, axis=1)
+positions_df['value_base'] = positions_df['value_base'].fillna(0.0)
 
-portfolio_value = positions_df['value_base'].sum()
-positions_df['weight'] = positions_df['value_base'] / portfolio_value if portfolio_value > 0 else 0
+portfolio_value = float(positions_df['value_base'].sum())
+
+if portfolio_value > 0 and np.isfinite(portfolio_value):
+    positions_df['weight'] = positions_df['value_base'] / portfolio_value
+else:
+    positions_df['weight'] = 0.0
+    st.warning('El valor total del portafolio es 0. Verifica cantidades/precios/montos.')
 
 st.subheader('📦 Resumen de Posiciones (en moneda base)')
 st.dataframe(positions_df[['symbol', 'class', 'currency', 'value_base', 'weight']].round(4), use_container_width=True)
@@ -341,12 +400,12 @@ if returns_df is not None:
     for sym in symbols:
         if sym in returns_df.columns:
             # Asumimos que series están en la moneda del activo; convertir a base
-            r_local = returns_df[sym]
+            r_local = returns_df[sym].astype(float)
             asset_ccy = positions_df.loc[positions_df['symbol'] == sym, 'currency'].values[0]
             r_conv = convert_return_to_base(r_local, asset_ccy, base_ccy, r_fx_series)
             asset_returns_base[sym] = r_conv
     if 'benchmark' in returns_df.columns:
-        benchmark_series = returns_df['benchmark']
+        benchmark_series = returns_df['benchmark'].astype(float)
 
 # 2) Generar series sintéticas para los activos que falten
 need_synth = [s for s in symbols if s not in asset_returns_base]
@@ -357,17 +416,18 @@ if len(need_synth) > 0:
         row = positions_df[positions_df['symbol'] == sym].iloc[0]
         if row['class'] == 'Acciones':
             # aproximación: rendimiento esperado anual por dividendo/valor
-            price = float(row.get('price', 0) or 1)
-            div = float(row.get('div_ps_ann', 0) or 0)
+            price = float(get_float(row, 'price', 1)) or 1.0
+            div = float(get_float(row, 'div_ps_ann', 0))
             mu_ann = div / price  # solo dividend yield (simplificado)
         else:
-            mu_ann = float(row.get('rate_annual', 0) or 0)
-        vol_ann = float(row.get('vol_annual', 0.15) or 0.15)
+            mu_ann = float(get_float(row, 'rate_annual', 0))
+        vol_ann = float(get_float(row, 'vol_annual', 0.15))
         mu_p = annual_to_period_rate(mu_ann)
         vol_p = annual_to_period_vol(vol_ann)
         np.random.seed(abs(hash(sym)) % (2**32))
         r = np.random.normal(loc=mu_p, scale=vol_p, size=int(synth_periods))
-        idx = pd.date_range(end=pd.Timestamp.today().normalize(), periods=int(synth_periods), freq='M')
+        # ✅ Cambiado 'M' (deprecado) por 'ME' (Month-End)
+        idx = pd.date_range(end=pd.Timestamp.today().normalize(), periods=int(synth_periods), freq='ME')
         ser_local = pd.Series(r, index=idx, name=sym)
         # convertir a base si la moneda difiere y hay serie FX
         ccy = row['currency']
@@ -391,7 +451,7 @@ if benchmark_series is None:
             r = r[-n:]
             idx = any_ser.index[-n:]
     else:
-        idx = pd.date_range(end=pd.Timestamp.today().normalize(), periods=int(synth_periods), freq='M')
+        idx = pd.date_range(end=pd.Timestamp.today().normalize(), periods=int(synth_periods), freq='ME')  # ✅ ME
     benchmark_series = pd.Series(r, index=idx, name='benchmark')
 
 # Alinear todo a un dataframe conjunto
@@ -403,10 +463,18 @@ if all_returns.empty:
 # Alinear benchmark
 common_index = all_returns.index
 benchmark_series = benchmark_series.reindex(common_index).dropna()
+if benchmark_series.empty:
+    st.error('La serie de benchmark quedó vacía tras alinear fechas. Revisa tus datos/fechas.')
+    st.stop()
 all_returns = all_returns.loc[benchmark_series.index]
 
 # Ponderaciones actuales
-weights = positions_df.set_index('symbol')['weight'].reindex(all_returns.columns).fillna(0.0).values
+weights = (
+    positions_df.set_index('symbol')['weight']
+    .reindex(all_returns.columns)
+    .fillna(0.0)
+    .values
+)
 
 # Retornos del portafolio
 port_ret = (all_returns @ weights)
@@ -465,7 +533,7 @@ st.dataframe(cov_mat.round(6), use_container_width=True)
 st.subheader('🧭 Monitoreo y Rebalanceo')
 # Objetivos por clase de activo
 current_by_class = positions_df.groupby('class')['value_base'].sum()
-current_weights_class = current_by_class / portfolio_value
+current_weights_class = current_by_class / portfolio_value if portfolio_value > 0 else current_by_class * 0
 
 st.markdown('**Pesos actuales por clase de activo**')
 st.dataframe(current_weights_class.to_frame('peso_actual').round(4), use_container_width=True)
@@ -501,7 +569,7 @@ rebalance_df['monto_requerido'] = (rebalance_df['peso_objetivo'] - rebalance_df[
 
 st.dataframe(rebalance_df.round(4), use_container_width=True)
 
-# Propuesta proporcional por símbolo: 
+# Propuesta proporcional por símbolo:
 # distribuir el monto a comprar/vender dentro de cada clase según su peso relativo
 proposals = []
 for cls in ASSET_CLASSES:
@@ -511,10 +579,14 @@ for cls in ASSET_CLASSES:
     cls_symbols = positions_df[positions_df['class'] == cls]
     if cls_symbols.empty:
         continue
-    # pesos relativos dentro de la clase
-    w_rel = cls_symbols['value_base'] / cls_symbols['value_base'].sum()
-    for _, r in cls_symbols.iterrows():
-        amt = delta_cls * w_rel.loc[r.name]
+    # pesos relativos dentro de la clase (maneja suma 0)
+    sum_cls = cls_symbols['value_base'].sum()
+    if sum_cls > 0:
+        w_rel = cls_symbols['value_base'] / sum_cls
+    else:
+        w_rel = pd.Series(1.0 / len(cls_symbols), index=cls_symbols.index)
+    for idx_row, r in cls_symbols.iterrows():
+        amt = delta_cls * w_rel.loc[idx_row]
         proposals.append({
             'class': cls,
             'symbol': r['symbol'],
@@ -536,9 +608,11 @@ buf = io.BytesIO()
 with pd.ExcelWriter(buf, engine='openpyxl') as writer:
     positions_df.to_excel(writer, sheet_name='posiciones', index=False)
     metrics_df = pd.DataFrame({
-        'metrica': ['mu_anual', 'vol_anual', 'sharpe_anual', 'alpha_periodo', 'beta', 'r2',
-                    f'var_hist_{int(alpha_level*100)}%', f'cvar_hist_{int(alpha_level*100)}%',
-                    f'var_norm_{int(alpha_level*100)}%', f'cvar_norm_{int(alpha_level*100)}%'],
+        'metrica': [
+            'mu_anual', 'vol_anual', 'sharpe_anual', 'alpha_periodo', 'beta', 'r2',
+            f'var_hist_{int(alpha_level*100)}%', f'cvar_hist_{int(alpha_level*100)}%',
+            f'var_norm_{int(alpha_level*100)}%', f'cvar_norm_{int(alpha_level*100)}%'
+        ],
         'valor': [mu_ann, vol_ann, sharpe_ann, alpha_p, beta_p, r2_p, var_hist, cvar_hist, var_norm, cvar_norm]
     })
     metrics_df.to_excel(writer, sheet_name='metricas', index=False)
@@ -551,4 +625,6 @@ excel_bytes = buf.getvalue()
 st.download_button('Descargar reporte Excel', data=excel_bytes, file_name='reporte_portafolio.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 st.caption('Sugerencias: carga tus series históricas para métricas más realistas. Asegúrate de incluir una columna "benchmark" y, si trabajas en moneda cruzada, la serie de retornos de USD vs PEN (columna "usd_pen").')
+
+
 
