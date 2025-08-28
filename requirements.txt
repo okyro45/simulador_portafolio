@@ -1,21 +1,5 @@
-# Framework principal para la aplicación web interactiva
-streamlit==1.37.0  
-
-# Manipulación y análisis de datos (tablas, series temporales, etc.)
-pandas==2.2.2  
-
-# Cálculos numéricos de alto rendimiento (base de pandas y scipy)
-numpy==1.26.4  
-
-# Funciones científicas y matemáticas avanzadas (optimización, estadísticas)
-scipy==1.13.1  
-
-# Modelos estadísticos y econométricos (ej. regresiones, betas)
-statsmodels==0.14.2  
-
-# Lectura y escritura de archivos Excel (.xlsx)
-openpyxl==3.1.5  
-
-# Descarga de datos financieros y series históricas de Yahoo Finance
-yfinance==0.2.40  
-
+pandas
+numpy
+scipy
+streamlit
+scikit-learn
