@@ -1,5 +1,7 @@
+streamlit
 pandas
 numpy
 scipy
-streamlit
 scikit-learn
+xlsxwriter
+openpyxl
