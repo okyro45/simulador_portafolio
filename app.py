@@ -234,18 +234,26 @@ if archivo_excel is not None:
     cargado_fondos = pd.read_excel(archivo_excel, sheet_name="Fondos")
     cargado_depositos = pd.read_excel(archivo_excel, sheet_name="Depositos")
 
-    # Actualizar session_state para autocompletar
-    st.session_state["acciones_data"] = "\n".join(
+    # Convertir a string para los text_area
+    acciones_str = "\n".join(
         cargado_acciones.astype(str).apply(lambda row: ",".join(row), axis=1)
     )
-    st.session_state["bonos_data"] = "\n".join(
+    bonos_str = "\n".join(
         cargado_bonos.astype(str).apply(lambda row: ",".join(row), axis=1)
     )
-    st.session_state["fondos_data"] = "\n".join(
+    fondos_str = "\n".join(
         cargado_fondos.astype(str).apply(lambda row: ",".join(row), axis=1)
     )
-    st.session_state["depositos_data"] = "\n".join(
+    depositos_str = "\n".join(
         cargado_depositos.astype(str).apply(lambda row: ",".join(row), axis=1)
     )
+
+    # Actualizar session_state correctamente
+    st.session_state.update({
+        "acciones_data": acciones_str,
+        "bonos_data": bonos_str,
+        "fondos_data": fondos_str,
+        "depositos_data": depositos_str
+    })
 
     st.success("✅ Simulación cargada y campos autocompletados. ¡Puedes seguir editando arriba!")
