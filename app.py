@@ -248,12 +248,14 @@ if archivo_excel is not None:
         cargado_depositos.astype(str).apply(lambda row: ",".join(row), axis=1)
     )
 
-    # Actualizar session_state correctamente
-    st.session_state.update({
-        "acciones_data": acciones_str,
-        "bonos_data": bonos_str,
-        "fondos_data": fondos_str,
-        "depositos_data": depositos_str
-    })
+    # Guardar en session_state
+    st.session_state.acciones_data = acciones_str
+    st.session_state.bonos_data = bonos_str
+    st.session_state.fondos_data = fondos_str
+    st.session_state.depositos_data = depositos_str
 
-    st.success("✅ Simulación cargada y campos autocompletados. ¡Puedes seguir editando arriba!")
+    # Forzar recarga de la app para que se actualicen los text_area
+    st.success("✅ Simulación cargada. Los campos se están autocompletando...")
+    st.experimental_rerun()
+
+
