@@ -18,7 +18,7 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ===================== SIDEBAR: PARÁMETROS + CARGA EXCEL (ARRIBA) =====================
+# ===================== SIDEBAR: PARÁMETROS =====================
 st.sidebar.header("Parámetros Generales")
 tipo_cambio = st.sidebar.number_input("Tipo de cambio PEN/USD", min_value=1.0, value=3.80, step=0.01)
 moneda_base = st.sidebar.radio("Moneda base para cálculos", ["PEN", "USD"])
@@ -27,58 +27,26 @@ volatilidad_mercado = st.sidebar.number_input("Volatilidad del mercado (%)", min
 rend_min_esperado = st.sidebar.number_input("Rendimiento mínimo esperado (%)", min_value=0.0, value=2.0, step=0.1) / 100
 tasa_libre_riesgo = st.sidebar.number_input("Tasa libre de riesgo (%)", min_value=0.0, value=2.0, step=0.1) / 100
 
-st.sidebar.markdown("---")
+# ===================== CARGAR DESDE EXCEL =====================
 archivo_excel = st.sidebar.file_uploader("📂 Cargar simulación (Excel con hojas)", type=["xlsx"])
-
-def df_to_lines(df: pd.DataFrame, columns, dtypes):
-    df2 = df.copy()
-    # reordenar y castear
-    missing = [c for c in columns if c not in df2.columns]
-    if missing:
-        raise ValueError(f"Faltan columnas: {missing}")
-    df2 = df2[columns]
-    if dtypes:
-        df2 = df2.astype(dtypes)
-    # convertir a líneas CSV
-    return "\n".join(df2.astype(str).apply(lambda r: ",".join(r), axis=1))
-
-def cargar_excel_en_campos(upload):
-    # Define columnas esperadas y tipos por hoja
-    acc_cols = ["Emisor","Num_Acciones","Importe","Precio","Dividendo","Moneda"]
-    acc_types = {"Emisor": str, "Num_Acciones": int, "Importe": float, "Precio": float, "Dividendo": float, "Moneda": str}
-
-    bon_cols = ["Emisor","Num_Bonos","Importe","Plazo_Meses","Tasa","Moneda"]
-    bon_types = {"Emisor": str, "Num_Bonos": int, "Importe": float, "Plazo_Meses": int, "Tasa": float, "Moneda": str}
-
-    fon_cols = ["Emisor","Num_Unidades","Importe","Tasa","Plazo_Meses","Moneda"]
-    fon_types = {"Emisor": str, "Num_Unidades": int, "Importe": float, "Tasa": float, "Plazo_Meses": int, "Moneda": str}
-
-    dep_cols = ["Emisor","Importe","Tasa","Plazo_Meses","Moneda"]
-    dep_types = {"Emisor": str, "Importe": float, "Tasa": float, "Plazo_Meses": int, "Moneda": str}
-
-    cargado_acciones = pd.read_excel(upload, sheet_name="Acciones")
-    cargado_bonos = pd.read_excel(upload, sheet_name="Bonos")
-    cargado_fondos = pd.read_excel(upload, sheet_name="Fondos")
-    cargado_depositos = pd.read_excel(upload, sheet_name="Depositos")
-
-    acciones_str  = df_to_lines(cargado_acciones, acc_cols, acc_types)
-    bonos_str     = df_to_lines(cargado_bonos, bon_cols, bon_types)
-    fondos_str    = df_to_lines(cargado_fondos, fon_cols, fon_types)
-    depositos_str = df_to_lines(cargado_depositos, dep_cols, dep_types)
-
-    st.session_state["acciones_input"]  = acciones_str
-    st.session_state["bonos_input"]     = bonos_str
-    st.session_state["fondos_input"]    = fondos_str
-    st.session_state["depositos_input"] = depositos_str
 
 if archivo_excel is not None:
     try:
-        cargar_excel_en_campos(archivo_excel)
-        st.sidebar.success("✅ Simulación cargada. Campos autocompletados.")
-        try:
-            st.rerun()
-        except Exception:
-            st.experimental_rerun()
+        cargado_acciones = pd.read_excel(archivo_excel, sheet_name="Acciones")
+        cargado_bonos = pd.read_excel(archivo_excel, sheet_name="Bonos")
+        cargado_fondos = pd.read_excel(archivo_excel, sheet_name="Fondos")
+        cargado_depositos = pd.read_excel(archivo_excel, sheet_name="Depositos")
+
+        # Convertir a string para los text_area
+        def df_to_str(df):
+            return "\n".join(df.astype(str).apply(lambda row: ",".join(row), axis=1))
+
+        st.session_state["acciones_input"]  = df_to_str(cargado_acciones)
+        st.session_state["bonos_input"]     = df_to_str(cargado_bonos)
+        st.session_state["fondos_input"]    = df_to_str(cargado_fondos)
+        st.session_state["depositos_input"] = df_to_str(cargado_depositos)
+
+        st.sidebar.success("✅ Simulación cargada y campos autocompletados.")
     except Exception as e:
         st.sidebar.error(f"❌ Error al leer el Excel: {e}")
 
@@ -140,7 +108,6 @@ def procesar_depositos(data):
     df["Ganancia"] = df["Importe"] * df["Tasa"] * (df["Plazo_Meses"]/1200)
     return df
 
-# Conversión mejorada
 def convertir_moneda(df, tipo_cambio, moneda_base):
     df = df.copy()
     columnas_convertibles = ["Importe", "Ganancia", "Precio", "Dividendo"]
@@ -203,7 +170,6 @@ VaR = float(np.percentile(rendimientos, (1-nivel_confianza)*100))
 CVaR = float(rendimientos[rendimientos <= VaR].mean())
 covarianza = float(np.cov(rendimientos, mercado)[0,1])
 
-# ===================== MOSTRAR MÉTRICAS =====================
 col1, col2 = st.columns(2)
 with col1:
     st.metric("💰 Total Invertido", f"{total_invertido:,.2f}")
