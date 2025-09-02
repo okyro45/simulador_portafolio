@@ -11,7 +11,7 @@ st.title("📊 Simulador de Portafolio de Inversiones (PEN & USD)")
 defaults = {
     "acciones_input": "EmpresaA,100,5000,50,2,PEN\nEmpresaB,50,3000,60,1.5,USD",
     "bonos_input": "Gobierno,10,2000,24,0.05,PEN\nEmpresaC,20,4000,12,0.06,USD",
-    "fondos_input": "FondoA,30,6000,0.07,24,PEN",
+    "fondos_input": "FondoA,30,6000,0.07,24,PEN\nFondoB,20,4000,0.08,36,USD",
     "depositos_input": "BancoA,5000,0.04,12,PEN\nBancoB,3000,0.05,6,USD",
 }
 for k, v in defaults.items():
@@ -236,3 +236,4 @@ st.download_button(
     file_name="simulacion_resumen.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+
