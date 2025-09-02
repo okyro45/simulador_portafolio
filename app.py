@@ -247,5 +247,3 @@ st.download_button(
     file_name="simulacion_resumen.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-
-
