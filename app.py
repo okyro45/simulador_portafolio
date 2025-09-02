@@ -1,28 +1,24 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy.stats import norm
 from sklearn.linear_model import LinearRegression
 from io import BytesIO
 
 st.set_page_config(page_title="Simulador Portafolio de Inversiones", layout="wide")
-
 st.title("📊 Simulador de Portafolio de Inversiones (PEN & USD)")
 
-# ===================== SESSION STATE PARA GUARDAR DATOS =====================
-if "acciones_data" not in st.session_state:
-    st.session_state["acciones_data"] = "EmpresaA,100,5000,50,2,PEN\nEmpresaB,50,3000,60,1.5,USD"
+# ===================== DEFAULTS EN SESSION_STATE =====================
+defaults = {
+    "acciones_input": "EmpresaA,100,5000,50,2,PEN\nEmpresaB,50,3000,60,1.5,USD",
+    "bonos_input": "Gobierno,10,2000,24,0.05,PEN\nEmpresaC,20,4000,12,0.06,USD",
+    "fondos_input": "FondoA,30,6000,0.07,24,PEN",
+    "depositos_input": "BancoA,5000,0.04,12,PEN\nBancoB,3000,0.05,6,USD",
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-if "bonos_data" not in st.session_state:
-    st.session_state["bonos_data"] = "Gobierno,10,2000,24,0.05,PEN\nEmpresaC,20,4000,12,0.06,USD"
-
-if "fondos_data" not in st.session_state:
-    st.session_state["fondos_data"] = "FondoA,30,6000,0.07,24,PEN"
-
-if "depositos_data" not in st.session_state:
-    st.session_state["depositos_data"] = "BancoA,5000,0.04,12,PEN\nBancoB,3000,0.05,6,USD"
-
-# ===================== INPUTS GENERALES =====================
+# ===================== SIDEBAR: PARÁMETROS + CARGA EXCEL (ARRIBA) =====================
 st.sidebar.header("Parámetros Generales")
 tipo_cambio = st.sidebar.number_input("Tipo de cambio PEN/USD", min_value=1.0, value=3.80, step=0.01)
 moneda_base = st.sidebar.radio("Moneda base para cálculos", ["PEN", "USD"])
@@ -31,92 +27,144 @@ volatilidad_mercado = st.sidebar.number_input("Volatilidad del mercado (%)", min
 rend_min_esperado = st.sidebar.number_input("Rendimiento mínimo esperado (%)", min_value=0.0, value=2.0, step=0.1) / 100
 tasa_libre_riesgo = st.sidebar.number_input("Tasa libre de riesgo (%)", min_value=0.0, value=2.0, step=0.1) / 100
 
+st.sidebar.markdown("---")
+archivo_excel = st.sidebar.file_uploader("📂 Cargar simulación (Excel con hojas)", type=["xlsx"])
+
+def df_to_lines(df: pd.DataFrame, columns, dtypes):
+    df2 = df.copy()
+    # reordenar y castear
+    missing = [c for c in columns if c not in df2.columns]
+    if missing:
+        raise ValueError(f"Faltan columnas: {missing}")
+    df2 = df2[columns]
+    if dtypes:
+        df2 = df2.astype(dtypes)
+    # convertir a líneas CSV
+    return "\n".join(df2.astype(str).apply(lambda r: ",".join(r), axis=1))
+
+def cargar_excel_en_campos(upload):
+    # Define columnas esperadas y tipos por hoja
+    acc_cols = ["Emisor","Num_Acciones","Importe","Precio","Dividendo","Moneda"]
+    acc_types = {"Emisor": str, "Num_Acciones": int, "Importe": float, "Precio": float, "Dividendo": float, "Moneda": str}
+
+    bon_cols = ["Emisor","Num_Bonos","Importe","Plazo_Meses","Tasa","Moneda"]
+    bon_types = {"Emisor": str, "Num_Bonos": int, "Importe": float, "Plazo_Meses": int, "Tasa": float, "Moneda": str}
+
+    fon_cols = ["Emisor","Num_Unidades","Importe","Tasa","Plazo_Meses","Moneda"]
+    fon_types = {"Emisor": str, "Num_Unidades": int, "Importe": float, "Tasa": float, "Plazo_Meses": int, "Moneda": str}
+
+    dep_cols = ["Emisor","Importe","Tasa","Plazo_Meses","Moneda"]
+    dep_types = {"Emisor": str, "Importe": float, "Tasa": float, "Plazo_Meses": int, "Moneda": str}
+
+    cargado_acciones = pd.read_excel(upload, sheet_name="Acciones")
+    cargado_bonos = pd.read_excel(upload, sheet_name="Bonos")
+    cargado_fondos = pd.read_excel(upload, sheet_name="Fondos")
+    cargado_depositos = pd.read_excel(upload, sheet_name="Depositos")
+
+    acciones_str  = df_to_lines(cargado_acciones, acc_cols, acc_types)
+    bonos_str     = df_to_lines(cargado_bonos, bon_cols, bon_types)
+    fondos_str    = df_to_lines(cargado_fondos, fon_cols, fon_types)
+    depositos_str = df_to_lines(cargado_depositos, dep_cols, dep_types)
+
+    st.session_state["acciones_input"]  = acciones_str
+    st.session_state["bonos_input"]     = bonos_str
+    st.session_state["fondos_input"]    = fondos_str
+    st.session_state["depositos_input"] = depositos_str
+
+if archivo_excel is not None:
+    try:
+        cargar_excel_en_campos(archivo_excel)
+        st.sidebar.success("✅ Simulación cargada. Campos autocompletados.")
+        try:
+            st.rerun()
+        except Exception:
+            st.experimental_rerun()
+    except Exception as e:
+        st.sidebar.error(f"❌ Error al leer el Excel: {e}")
+
 # ===================== INPUTS DE ACTIVOS =====================
 st.subheader("📈 Acciones")
-acciones_data = st.text_area(
+st.text_area(
     "Ingrese datos de Acciones (emisor,num_acciones,importe,precio,dividendo,moneda PEN/USD):",
-    st.session_state["acciones_data"],
-    key="acciones_data"
+    st.session_state["acciones_input"],
+    key="acciones_input"
 )
 
 st.subheader("💵 Bonos")
-bonos_data = st.text_area(
+st.text_area(
     "Ingrese datos de Bonos (emisor,num_bonos,importe,plazo_meses,tasa_anual,moneda PEN/USD):",
-    st.session_state["bonos_data"],
-    key="bonos_data"
+    st.session_state["bonos_input"],
+    key="bonos_input"
 )
 
 st.subheader("🏢 Fondos de Inversión Inmobiliarios")
-fondos_data = st.text_area(
+st.text_area(
     "Ingrese datos de Fondos (emisor,num_unidades,importe,tasa_anual,plazo_meses,moneda PEN/USD):",
-    st.session_state["fondos_data"],
-    key="fondos_data"
+    st.session_state["fondos_input"],
+    key="fondos_input"
 )
 
 st.subheader("🏦 Depósitos a Plazo Fijo")
-depositos_data = st.text_area(
+st.text_area(
     "Ingrese datos de Depósitos (emisor,importe,tasa_anual,plazo_meses,moneda PEN/USD):",
-    st.session_state["depositos_data"],
-    key="depositos_data"
+    st.session_state["depositos_input"],
+    key="depositos_input"
 )
 
 # ===================== FUNCIONES DE PROCESAMIENTO =====================
 def procesar_acciones(data):
-    rows = [x.split(",") for x in data.strip().split("\n")]
+    rows = [x.split(",") for x in data.strip().split("\n") if x.strip()]
     df = pd.DataFrame(rows, columns=["Emisor","Num_Acciones","Importe","Precio","Dividendo","Moneda"])
     df = df.astype({"Num_Acciones":int,"Importe":float,"Precio":float,"Dividendo":float})
     df["Ganancia"] = df["Num_Acciones"] * df["Dividendo"]
     return df
 
 def procesar_bonos(data):
-    rows = [x.split(",") for x in data.strip().split("\n")]
+    rows = [x.split(",") for x in data.strip().split("\n") if x.strip()]
     df = pd.DataFrame(rows, columns=["Emisor","Num_Bonos","Importe","Plazo_Meses","Tasa","Moneda"])
     df = df.astype({"Num_Bonos":int,"Importe":float,"Plazo_Meses":int,"Tasa":float})
     df["Ganancia"] = df["Importe"] * df["Tasa"] * (df["Plazo_Meses"]/1200)
     return df
 
 def procesar_fondos(data):
-    rows = [x.split(",") for x in data.strip().split("\n")]
+    rows = [x.split(",") for x in data.strip().split("\n") if x.strip()]
     df = pd.DataFrame(rows, columns=["Emisor","Num_Unidades","Importe","Tasa","Plazo_Meses","Moneda"])
     df = df.astype({"Num_Unidades":int,"Importe":float,"Tasa":float,"Plazo_Meses":int})
     df["Ganancia"] = df["Importe"] * df["Tasa"] * (df["Plazo_Meses"]/1200)
     return df
 
 def procesar_depositos(data):
-    rows = [x.split(",") for x in data.strip().split("\n")]
+    rows = [x.split(",") for x in data.strip().split("\n") if x.strip()]
     df = pd.DataFrame(rows, columns=["Emisor","Importe","Tasa","Plazo_Meses","Moneda"])
     df = df.astype({"Importe":float,"Tasa":float,"Plazo_Meses":int})
     df["Ganancia"] = df["Importe"] * df["Tasa"] * (df["Plazo_Meses"]/1200)
     return df
 
-# Conversion mejorada
+# Conversión mejorada
 def convertir_moneda(df, tipo_cambio, moneda_base):
     df = df.copy()
     columnas_convertibles = ["Importe", "Ganancia", "Precio", "Dividendo"]
-
     if moneda_base == "PEN":
         for col in columnas_convertibles:
             if col in df.columns:
                 df.loc[df["Moneda"] == "USD", col] *= tipo_cambio
         df.loc[df["Moneda"] == "USD", "Moneda"] = "PEN"
-
-    elif moneda_base == "USD":
+    else:  # USD
         for col in columnas_convertibles:
             if col in df.columns:
                 df.loc[df["Moneda"] == "PEN", col] /= tipo_cambio
         df.loc[df["Moneda"] == "PEN", "Moneda"] = "USD"
-
     return df
 
 # ===================== PROCESAMIENTO =====================
-acciones = procesar_acciones(st.session_state["acciones_data"])
-bonos = procesar_bonos(st.session_state["bonos_data"])
-fondos = procesar_fondos(st.session_state["fondos_data"])
-depositos = procesar_depositos(st.session_state["depositos_data"])
+acciones  = procesar_acciones(st.session_state["acciones_input"])
+bonos     = procesar_bonos(st.session_state["bonos_input"])
+fondos    = procesar_fondos(st.session_state["fondos_input"])
+depositos = procesar_depositos(st.session_state["depositos_input"])
 
-acciones = convertir_moneda(acciones, tipo_cambio, moneda_base)
-bonos = convertir_moneda(bonos, tipo_cambio, moneda_base)
-fondos = convertir_moneda(fondos, tipo_cambio, moneda_base)
+acciones  = convertir_moneda(acciones,  tipo_cambio, moneda_base)
+bonos     = convertir_moneda(bonos,     tipo_cambio, moneda_base)
+fondos    = convertir_moneda(fondos,    tipo_cambio, moneda_base)
 depositos = convertir_moneda(depositos, tipo_cambio, moneda_base)
 
 # ===================== RESULTADOS POR ACTIVO =====================
@@ -132,30 +180,30 @@ portafolio = pd.concat([
     acciones[["Emisor","Importe","Ganancia","Moneda"]],
     bonos[["Emisor","Importe","Ganancia","Moneda"]],
     fondos[["Emisor","Importe","Ganancia","Moneda"]],
-    depositos[["Emisor","Importe","Ganancia","Moneda"]]
+    depositos[["Emisor","Importe","Ganancia","Moneda"]],
 ], axis=0)
 
 total_invertido = portafolio["Importe"].sum()
 total_ganancia = portafolio["Ganancia"].sum()
-rendimiento_esperado = total_ganancia / total_invertido
+rendimiento_esperado = total_ganancia / total_invertido if total_invertido else 0.0
 
 np.random.seed(42)
-rendimientos = np.random.normal(rendimiento_esperado, volatilidad_mercado, 1000)
-std_dev = np.std(rendimientos)
-rendimiento_promedio = np.mean(rendimientos)
+rendimientos = np.random.normal(rendimiento_esperado, volatilidad_mercado or 1e-9, 1000)
+std_dev = float(np.std(rendimientos)) or 1e-9
+rendimiento_promedio = float(np.mean(rendimientos))
 sharpe_ratio = (rendimiento_promedio - tasa_libre_riesgo) / std_dev
 
 mercado = np.random.normal(0.08, 0.15, 1000)
 modelo = LinearRegression().fit(mercado.reshape(-1,1), rendimientos)
-beta = modelo.coef_[0]
-alpha = modelo.intercept_
-r_cuadrado = modelo.score(mercado.reshape(-1,1), rendimientos)
+beta = float(modelo.coef_[0])
+alpha = float(modelo.intercept_)
+r_cuadrado = float(modelo.score(mercado.reshape(-1,1), rendimientos))
 
-VaR = np.percentile(rendimientos, (1-nivel_confianza)*100)
-CVaR = rendimientos[rendimientos <= VaR].mean()
-covarianza = np.cov(rendimientos, mercado)[0,1]
+VaR = float(np.percentile(rendimientos, (1-nivel_confianza)*100))
+CVaR = float(rendimientos[rendimientos <= VaR].mean())
+covarianza = float(np.cov(rendimientos, mercado)[0,1])
 
-# ===================== MOSTRAR =====================
+# ===================== MOSTRAR MÉTRICAS =====================
 col1, col2 = st.columns(2)
 with col1:
     st.metric("💰 Total Invertido", f"{total_invertido:,.2f}")
@@ -163,7 +211,6 @@ with col1:
     st.metric("🎯 Rendimiento Esperado", f"{rendimiento_esperado:.2%}")
     st.metric("📉 Desviación Estándar", f"{std_dev:.2%}")
     st.metric("📊 Ratio de Sharpe", f"{sharpe_ratio:.2f}")
-
 with col2:
     st.metric("📈 Beta", f"{beta:.2f}")
     st.metric("✨ Alfa", f"{alpha:.2%}")
@@ -198,7 +245,6 @@ metrics = {
 }
 
 excel_bytes = exportar_excel(acciones, bonos, fondos, depositos, metrics)
-
 st.download_button(
     label="⬇️ Descargar Simulación en Excel",
     data=excel_bytes,
@@ -208,54 +254,19 @@ st.download_button(
 
 def exportar_excel_resumen(acciones, bonos, fondos, depositos):
     output = BytesIO()
-    acciones_resumen = acciones.copy(); acciones_resumen["Categoría"] = "Acciones"
-    bonos_resumen = bonos.copy(); bonos_resumen["Categoría"] = "Bonos"
-    fondos_resumen = fondos.copy(); fondos_resumen["Categoría"] = "Fondos Inmobiliarios"
-    depositos_resumen = depositos.copy(); depositos_resumen["Categoría"] = "Depósitos"
-    resumen = pd.concat([acciones_resumen, bonos_resumen, fondos_resumen, depositos_resumen], axis=0)
+    a = acciones.copy();  a["Categoría"] = "Acciones"
+    b = bonos.copy();     b["Categoría"] = "Bonos"
+    f = fondos.copy();    f["Categoría"] = "Fondos Inmobiliarios"
+    d = depositos.copy(); d["Categoría"] = "Depósitos"
+    resumen = pd.concat([a, b, f, d], axis=0)
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         resumen.to_excel(writer, index=False, sheet_name="Resumen")
     return output.getvalue()
 
 excel_resumen = exportar_excel_resumen(acciones, bonos, fondos, depositos)
-
 st.download_button(
     label="⬇️ Descargar Resumen Consolidado en Excel",
     data=excel_resumen,
     file_name="simulacion_resumen.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-
-# ===================== CARGAR DESDE EXCEL =====================
-archivo_excel = st.file_uploader("📂 Cargar simulación desde Excel", type=["xlsx"])
-if archivo_excel is not None:
-    cargado_acciones = pd.read_excel(archivo_excel, sheet_name="Acciones")
-    cargado_bonos = pd.read_excel(archivo_excel, sheet_name="Bonos")
-    cargado_fondos = pd.read_excel(archivo_excel, sheet_name="Fondos")
-    cargado_depositos = pd.read_excel(archivo_excel, sheet_name="Depositos")
-
-    # Convertir a string para los text_area
-    acciones_str = "\n".join(
-        cargado_acciones.astype(str).apply(lambda row: ",".join(row), axis=1)
-    )
-    bonos_str = "\n".join(
-        cargado_bonos.astype(str).apply(lambda row: ",".join(row), axis=1)
-    )
-    fondos_str = "\n".join(
-        cargado_fondos.astype(str).apply(lambda row: ",".join(row), axis=1)
-    )
-    depositos_str = "\n".join(
-        cargado_depositos.astype(str).apply(lambda row: ",".join(row), axis=1)
-    )
-
-    # Guardar en session_state
-    st.session_state.acciones_data = acciones_str
-    st.session_state.bonos_data = bonos_str
-    st.session_state.fondos_data = fondos_str
-    st.session_state.depositos_data = depositos_str
-
-    # Forzar recarga de la app para que se actualicen los text_area
-    st.success("✅ Simulación cargada. Los campos se están autocompletando...")
-    st.experimental_rerun()
-
-
