@@ -81,7 +81,18 @@ st.text_area(
 
 # ===================== FUNCIONES DE PROCESAMIENTO =====================
 def procesar_acciones(data):
-    rows = [x.split(",") for x in data.strip().split("\n") if x.strip()]
+    rows = []
+    for x in data.strip().split("\n"):
+        if not x.strip():
+            continue
+        partes = [p.strip() for p in x.split(",")]
+        if len(partes) != 6:
+            continue  # ignorar filas mal formadas
+        rows.append(partes)
+
+    if not rows:
+        return pd.DataFrame(columns=["Emisor","Num_Acciones","Importe","Precio","Dividendo","Moneda"])
+
     df = pd.DataFrame(rows, columns=["Emisor","Num_Acciones","Importe","Precio","Dividendo","Moneda"])
     df = df.astype({"Num_Acciones":int,"Importe":float,"Precio":float,"Dividendo":float})
     df["Ganancia"] = df["Num_Acciones"] * df["Dividendo"]
@@ -236,4 +247,5 @@ st.download_button(
     file_name="simulacion_resumen.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+
 
